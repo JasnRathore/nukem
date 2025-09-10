@@ -55,14 +55,35 @@ func overwriteFile(path string) error {
 	return nil
 }
 
-// takeOwnership uses Windows 'takeown' to take ownership of a file/folder recursively.
 func takeOwnership(path string) error {
-	cmd := exec.Command("takeown", "/F", path, "/R", "/D", "Y")
-	out, err := cmd.CombinedOutput()
+	fi, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("takeown failed: %v, output: %s", err, string(out))
+		return err
+	}
+
+	var cmd *exec.Cmd
+	if fi.IsDir() {
+		// Use /R (recursive) on directories
+		cmd = exec.Command("takeown", "/F", path, "/R", "/D", "Y")
+	} else {
+		// No /R for files
+		cmd = exec.Command("takeown", "/F", path)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("takeown failed: %v, output: %s", err, string(output))
 	}
 	return nil
+}
+
+func makeWritable(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	mode := fi.Mode() | 0200 // add user write permission
+	return os.Chmod(path, mode)
 }
 
 // grantFullControl grants full control permissions recursively using 'icacls'.
@@ -78,13 +99,17 @@ func grantFullControl(path string) error {
 // secureDeleteDir overwrites all files multiple times, tries to take ownership and set permissions if force,
 // then deletes the directory entirely.
 func secureDeleteDir(dir string, passes int, force bool) error {
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			fmt.Printf("Skipping path %s due to error: %v\n", path, err)
-			return nil // Skip errors to continue
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
+		// Handle errors reading file/directory metadata gracefully:
+		if walkErr != nil {
+			fmt.Printf("Skipping path %q due to error: %v\n", path, walkErr)
+			return nil // Continue walking without treating as fatal
 		}
 		if !info.IsDir() {
 			if force {
+				if err := makeWritable(path); err != nil {
+					fmt.Printf("Warning: could not make writable %s: %v\n", path, err)
+				}
 				if err := takeOwnership(path); err != nil {
 					fmt.Printf("Warning: take ownership failed on %s: %v\n", path, err)
 				}
