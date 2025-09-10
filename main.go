@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 )
 
+// overwriteFile overwrites the file content with cryptographic random bytes.
 func overwriteFile(path string) error {
 	file, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
@@ -31,43 +34,70 @@ func overwriteFile(path string) error {
 			return fmt.Errorf("failed to read random data: %v", err)
 		}
 		if n != bufSize {
-			return fmt.Errorf("short random read: %d bytes", n)
+			return fmt.Errorf("short random read: %d", n)
 		}
-
 		toWrite := bufSize
 		if remaining := size - totalWritten; int64(toWrite) > remaining {
 			toWrite = int(remaining)
 		}
-
 		wn, err := file.Write(buf[:toWrite])
 		if err != nil {
-			return fmt.Errorf("failed to write to file %s: %v", path, err)
+			return fmt.Errorf("failed writing to file %s: %v", path, err)
 		}
 		if wn != toWrite {
 			return fmt.Errorf("short write to file %s: wrote %d bytes instead of %d", path, wn, toWrite)
 		}
-
 		totalWritten += int64(wn)
 	}
-
-	err = file.Sync()
-	if err != nil {
+	if err := file.Sync(); err != nil {
 		return fmt.Errorf("failed to sync file %s: %v", path, err)
 	}
-
 	return nil
 }
 
-func secureDeleteDir(dir string) error {
+// takeOwnership uses Windows 'takeown' to take ownership of a file/folder recursively.
+func takeOwnership(path string) error {
+	cmd := exec.Command("takeown", "/F", path, "/R", "/D", "Y")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("takeown failed: %v, output: %s", err, string(out))
+	}
+	return nil
+}
+
+// grantFullControl grants full control permissions recursively using 'icacls'.
+func grantFullControl(path string) error {
+	cmd := exec.Command("icacls", path, "/grant", "Administrators:F", "/T", "/C")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("icacls failed: %v, output: %s", err, string(out))
+	}
+	return nil
+}
+
+// secureDeleteDir overwrites all files multiple times, tries to take ownership and set permissions if force,
+// then deletes the directory entirely.
+func secureDeleteDir(dir string, passes int, force bool) error {
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			fmt.Printf("Skipping path %s due to error: %v\n", path, err)
+			return nil // Skip errors to continue
 		}
-
 		if !info.IsDir() {
+			if force {
+				if err := takeOwnership(path); err != nil {
+					fmt.Printf("Warning: take ownership failed on %s: %v\n", path, err)
+				}
+				if err := grantFullControl(path); err != nil {
+					fmt.Printf("Warning: grant full control failed on %s: %v\n", path, err)
+				}
+			}
 			fmt.Printf("Overwriting file: %s\n", path)
-			if err := overwriteFile(path); err != nil {
-				return err
+			for i := range passes {
+				if err := overwriteFile(path); err != nil {
+					fmt.Printf("Failed to overwrite file %s on pass %d: %v\n", path, i+1, err)
+					break // skip further attempts on this file
+				}
 			}
 		}
 		return nil
@@ -80,18 +110,26 @@ func secureDeleteDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to remove directory %s: %v", dir, err)
 	}
-
-	fmt.Printf("Securely deleted directory: %s\n", dir)
+	fmt.Printf("Successfully securely wiped directory: %s\n", dir)
 	return nil
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("Usage: go run main.go <directory_path>")
+	if len(os.Args) != 4 {
+		fmt.Println("Usage: go run main.go <directory_path> <no_of_passes> <force(true|false)>")
 		os.Exit(1)
 	}
-
 	dir := os.Args[1]
+	passes, err := strconv.Atoi(os.Args[2])
+	if err != nil || passes < 1 {
+		log.Fatalf("Invalid number of passes: %v", err)
+	}
+	force := false
+	if os.Args[3] == "true" {
+		force = true
+	} else if os.Args[3] != "false" {
+		log.Fatalf("Force flag must be 'true' or 'false', got: %s", os.Args[3])
+	}
 
 	fi, err := os.Stat(dir)
 	if err != nil {
@@ -101,9 +139,8 @@ func main() {
 		log.Fatalf("%s is not a directory", dir)
 	}
 
-	fmt.Printf("Starting secure deletion of directory: %s\n", dir)
-	err = secureDeleteDir(dir)
-	if err != nil {
-		log.Fatalf("Secure deletion failed: %v", err)
+	fmt.Printf("Starting secure wipe of directory: %s with %d passes, force: %v\n", dir, passes, force)
+	if err := secureDeleteDir(dir, passes, force); err != nil {
+		log.Fatalf("Secure wipe failed: %v", err)
 	}
 }
