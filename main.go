@@ -3,13 +3,16 @@ package main
 import (
 	"crypto/rand"
 	"fmt"
-	"github.com/google/uuid"
 	"log"
+	det "nukem/detection"
 	"nukem/report"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 func overwriteFile(path string) error {
@@ -261,19 +264,22 @@ func secureDeleteDirConcurrent(dir string, passes int, force bool, silent bool, 
 }
 
 func main() {
-	dir := "C:/Users/Jasn/danger"
+	partitions := det.GetNonMountedPartitions()
+	//dir := "C:/Users/Jasn/danger"
 	passes := 3
 	force := true
 	stealth := true
-	rep := report.NewEraseReport(dir, passes, force, stealth)
+	rep := report.NewEraseReport(strings.Join(partitions, ","), passes, force, stealth)
 
-	fi, err := os.Stat(dir)
-	if err != nil || !fi.IsDir() {
-		log.Fatal("Invalid directory")
-	}
+	for i := range len(partitions) {
+		fi, err := os.Stat(partitions[i])
+		if err != nil || !fi.IsDir() {
+			log.Fatal("Invalid directory")
+		}
+		if err := secureDeleteDirConcurrent(partitions[i], passes, force, stealth, rep, 20); err != nil {
+			log.Printf("Error during wipe: %v\n", err)
+		}
 
-	if err := secureDeleteDirConcurrent(dir, passes, force, stealth, rep, 20); err != nil {
-		log.Printf("Error during wipe: %v\n", err)
 	}
 	rep.Complete()
 	uid := uuid.New().String()
