@@ -2,15 +2,28 @@ package report
 
 import (
 	"fmt"
-	"os"
 	"time"
+
+	"github.com/jung-kurt/gofpdf"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/host"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 type FileEraseLog struct {
 	Path   string
-	Status string // "WIPED", "FAILED"
+	Status string
 	Passes int
 	Error  string
+}
+
+type HardwareInfo struct {
+	Hostname string
+	OS       string
+	Platform string
+	CPU      string
+	MemTotal uint64
+	MemUsed  uint64
 }
 
 type EraseReport struct {
@@ -23,22 +36,25 @@ type EraseReport struct {
 	Logs         []FileEraseLog
 	ErrorCount   int
 	SuccessCount int
+	Hardware     HardwareInfo
 }
 
 func NewEraseReport(dir string, passes int, force, stealth bool) *EraseReport {
+	hw := getHardwareInfo()
 	return &EraseReport{
 		Dir:       dir,
 		Passes:    passes,
 		Force:     force,
 		Stealth:   stealth,
 		StartTime: time.Now(),
+		Hardware:  hw,
 	}
 }
 
 func (r *EraseReport) AddLog(log FileEraseLog) {
 	if log.Status == "WIPED" {
 		r.SuccessCount++
-	} else if log.Status == "FAILED" {
+	} else {
 		r.ErrorCount++
 	}
 	r.Logs = append(r.Logs, log)
@@ -48,32 +64,73 @@ func (r *EraseReport) Complete() {
 	r.EndTime = time.Now()
 }
 
-func (r *EraseReport) WriteToFile(filename string) error {
-	f, err := os.Create(filename)
-	if err != nil {
-		return err
+func (r *EraseReport) WritePDF(filename string) error {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.AddPage()
+	pdf.SetFont("Arial", "B", 16)
+
+	// Title
+	pdf.CellFormat(0, 10, "Secure Erase Report", "", 1, "C", false, 0, "")
+
+	// Report content
+	pdf.SetFont("Arial", "", 12)
+	status := "PASSED"
+	if r.ErrorCount > 0 {
+		status = "FAILED"
 	}
-	defer f.Close()
-	fmt.Fprintf(f, "===================================\n Secure Erase Report\n===================================\n\n")
-	fmt.Fprintf(f, "Target directory : %s\nErase date/time  : %v\nWipe passes      : %d\nForce mode       : %v\nStealth mode     : %v\nOperation status : %s\n\nFiles erased:\n",
-		r.Dir, r.StartTime.Format(time.RFC1123), r.Passes, r.Force, r.Stealth,
-		ifThenElse(r.ErrorCount == 0, "PASSED", "FAILED"),
+	content := fmt.Sprintf("Directory: %s\nStart: %s\nEnd: %s\nPasses: %d\nForce: %v\nStealth: %v\nStatus: %s\n\n",
+		r.Dir,
+		r.StartTime.Format(time.RFC1123),
+		r.EndTime.Format(time.RFC1123),
+		r.Passes,
+		r.Force,
+		r.Stealth,
+		status,
 	)
+	pdf.MultiCell(0, 8, content, "", "L", false)
+
+	// Hardware information
+	hw := r.Hardware
+	hardwareInfo := fmt.Sprintf("Hostname: %s\nOS: %s (%s)\nCPU: %s\nMemory: %.2f GB\n\n",
+		hw.Hostname,
+		hw.OS,
+		hw.Platform,
+		hw.CPU,
+		float64(hw.MemTotal)/(1024*1024*1024),
+	)
+	pdf.MultiCell(0, 8, "Hardware Information:", "", "L", false)
+	pdf.MultiCell(0, 8, hardwareInfo, "", "L", false)
+
+	// Logs
+	pdf.MultiCell(0, 8, "File Logs:", "", "L", false)
 	for _, log := range r.Logs {
-		if log.Status == "WIPED" {
-			fmt.Fprintf(f, "- %s : [WIPED] (%d passes)\n", log.Path, log.Passes)
-		} else {
-			fmt.Fprintf(f, "- %s : [FAILED] (%d passes) Reason: %s\n", log.Path, log.Passes, log.Error)
+		row := fmt.Sprintf("- %s: %s (%d passes)", log.Path, log.Status, log.Passes)
+		if log.Status != "WIPED" && log.Error != "" {
+			row += fmt.Sprintf(" Error: %s", log.Error)
 		}
+		pdf.MultiCell(0, 6, row, "", "L", false)
 	}
-	fmt.Fprintf(f, "\nTotal files successfully erased: %d\nTotal files failed: %d\nElapsed time: %v\n",
-		r.SuccessCount, r.ErrorCount, r.EndTime.Sub(r.StartTime))
-	return nil
+
+	return pdf.OutputFileAndClose(filename)
 }
 
-func ifThenElse(cond bool, a, b string) string {
-	if cond {
-		return a
+func getHardwareInfo() HardwareInfo {
+	hw := HardwareInfo{}
+
+	if info, err := host.Info(); err == nil {
+		hw.Hostname = info.Hostname
+		hw.OS = info.OS
+		hw.Platform = info.Platform
 	}
-	return b
+
+	if cpus, err := cpu.Info(); err == nil && len(cpus) > 0 {
+		hw.CPU = fmt.Sprintf("%s %fMHz", cpus[0].ModelName, cpus[0].Mhz)
+	}
+
+	if vm, err := mem.VirtualMemory(); err == nil {
+		hw.MemTotal = vm.Total
+		hw.MemUsed = vm.Used
+	}
+
+	return hw
 }
