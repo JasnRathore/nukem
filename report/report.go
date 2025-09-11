@@ -32,6 +32,7 @@ type EraseReport struct {
 	EndTime      time.Time
 	Force        bool
 	Stealth      bool
+	Method       string
 	Passes       int
 	Logs         []FileEraseLog
 	ErrorCount   int
@@ -39,13 +40,14 @@ type EraseReport struct {
 	Hardware     HardwareInfo
 }
 
-func NewEraseReport(dir string, passes int, force, stealth bool) *EraseReport {
+func NewEraseReport(dir string, passes int, force, stealth bool, method string) *EraseReport {
 	hw := getHardwareInfo()
 	return &EraseReport{
 		Dir:       dir,
 		Passes:    passes,
 		Force:     force,
 		Stealth:   stealth,
+		Method:    method,
 		StartTime: time.Now(),
 		Hardware:  hw,
 	}
@@ -78,13 +80,14 @@ func (r *EraseReport) WritePDF(filename string) error {
 	if r.ErrorCount > 0 {
 		status = "FAILED"
 	}
-	content := fmt.Sprintf("Directory: %s\nStart: %s\nEnd: %s\nPasses: %d\nForce: %v\nStealth: %v\nStatus: %s\n\n",
+	content := fmt.Sprintf("Directory: %s\nStart: %s\nEnd: %s\nPasses: %d\nForce: %v\nStealth: %v\nMethod: %s\nStatus: %s\n\n",
 		r.Dir,
 		r.StartTime.Format(time.RFC1123),
 		r.EndTime.Format(time.RFC1123),
 		r.Passes,
 		r.Force,
 		r.Stealth,
+		r.Method,
 		status,
 	)
 	pdf.MultiCell(0, 8, content, "", "L", false)
