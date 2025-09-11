@@ -4,10 +4,10 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"nukem/report"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 )
 
 func overwriteFile(path string) error {
@@ -95,45 +95,28 @@ func grantFullControl(path string) error {
 	return nil
 }
 
-// secureDeleteDir overwrites all files multiple times, tries to take ownership and set permissions if force,
-// then deletes the directory entirely.
-func secureDeleteDir(dir string, passes int, force bool, silent bool) error {
+func secureDeleteDir(dir string, passes int, force bool, silent bool, rep *report.EraseReport) error {
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
-		// Handle errors reading file/directory metadata gracefully:
 		if walkErr != nil {
-			if !silent {
-				fmt.Printf("Skipping path %q due to error: %v\n", path, walkErr)
-			}
-			return nil // Continue walking without treating as fatal
+			rep.AddLog(report.FileEraseLog{Path: path, Status: "FAILED", Passes: passes, Error: walkErr.Error()})
+			return nil
 		}
 		if !info.IsDir() {
-			if force {
-				if !silent {
-					if err := makeWritable(path); err != nil {
-						fmt.Printf("Warning: could not make writable %s: %v\n", path, err)
-					}
-					if err := takeOwnership(path); err != nil {
-						fmt.Printf("Warning: take ownership failed on %s: %v\n", path, err)
-					}
-					if err := grantFullControl(path); err != nil {
-						fmt.Printf("Warning: grant full control failed on %s: %v\n", path, err)
-					}
-				}
-			}
-
-			if !silent {
-				fmt.Printf("Overwriting file: %s\n", path)
-			}
-			for i := range passes {
+			status := "WIPED"
+			var errText string
+			for i := 0; i < passes; i++ {
 				if err := overwriteFile(path); err != nil {
-
-					if !silent {
-						fmt.Printf("Failed to overwrite file %s on pass %d: %v\n", path, i+1, err)
-
-					}
-					break // skip further attempts on this file
+					status = "FAILED"
+					errText = err.Error()
+					break
 				}
 			}
+			rep.AddLog(report.FileEraseLog{
+				Path:   path,
+				Status: status,
+				Passes: passes,
+				Error:  errText,
+			})
 		}
 		return nil
 	})
@@ -152,49 +135,24 @@ func secureDeleteDir(dir string, passes int, force bool, silent bool) error {
 }
 
 func main() {
-	if len(os.Args) < 4 {
-		fmt.Println("Usage: go run main.go <directory_path> <no_of_passes> <force(true|false)> <stealth(true|false)>")
-		os.Exit(1)
-	}
-	dir := os.Args[1]
-	passes, err := strconv.Atoi(os.Args[2])
-	if err != nil || passes < 1 {
-		log.Fatalf("Invalid number of passes: %v", err)
-	}
-	force := false
-	if os.Args[3] == "true" {
-		force = true
-	} else if os.Args[3] != "false" {
-		log.Fatalf("Force flag must be 'true' or 'false', got: %s", os.Args[3])
-	}
+	dir := "C:/Users/Jasn/Downloads"
+	passes := 5
+	force := true
+	stealth := true
 
-	silent := false
-	if len(os.Args) == 5 {
-		switch os.Args[4] {
-		case "true":
-			silent = true
-		case "false":
-			silent = false
-		}
-	}
+	rep := report.NewEraseReport(dir, passes, force, stealth)
+
 	fi, err := os.Stat(dir)
-	if err != nil {
-		if !silent {
-			log.Fatalf("Failed to stat directory: %v", err)
-		}
-	}
-	if !fi.IsDir() {
-		if !silent {
-			log.Fatalf("%s is not a directory", dir)
-		}
+	if err != nil || !fi.IsDir() {
+		log.Fatal("Invalid directory")
 	}
 
-	if !silent {
-		fmt.Printf("Starting secure wipe of directory: %s with %d passes, force: %v\n", dir, passes, force)
+	if err := secureDeleteDir(dir, passes, force, stealth, rep); err != nil {
+		log.Printf("Error during wipe: %v\n", err)
 	}
-	if err := secureDeleteDir(dir, passes, force, silent); err != nil {
-		if !silent {
-			log.Fatalf("Secure wipe failed: %v", err)
-		}
+	rep.Complete()
+	if err := rep.WriteToFile("erase_report.txt"); err != nil {
+		log.Fatalf("Failed to write erase report: %v", err)
 	}
+	fmt.Println("Erase process and report completed.")
 }
